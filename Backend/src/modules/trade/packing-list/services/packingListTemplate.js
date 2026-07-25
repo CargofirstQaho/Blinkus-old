@@ -249,6 +249,18 @@ function addressBlock(doc, label, value) {
   doc.y = textY + textH + 8;
 }
 
+function measureItemsTableHeaderHeight(doc) {
+  const PAD_X = 6;
+  const PAD_Y = 6;
+  doc.fontSize(7.5).font(SANS_B);
+  let headerH = 0;
+  ITEM_COLS.forEach((c) => {
+    const h = doc.heightOfString(c.label, { width: c.width - PAD_X * 2, align: c.align, lineGap: 1 });
+    if (h > headerH) headerH = h;
+  });
+  return headerH + PAD_Y * 2;
+}
+
 function itemsTable(doc, items, totals) {
   const PAD_X = 6;
   const PAD_Y = 6;
@@ -503,7 +515,7 @@ export async function buildPackingListPdf(pl, organization, logoUrl) {
     fieldGrid(doc, shipRows);
 
     doc.y += SECTION_GAP;
-    sectionHeading(doc, nextNum(), 'Item Details', 40);
+    sectionHeading(doc, nextNum(), 'Item Details', Math.max(60, measureItemsTableHeaderHeight(doc) + 24));
     itemsTable(doc, items, totals);
 
     if ((pl.remarks || '').toString().trim()) {
