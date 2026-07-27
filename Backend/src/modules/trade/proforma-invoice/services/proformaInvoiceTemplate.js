@@ -1,10 +1,9 @@
 import PDFDocument from 'pdfkit';
 import {
   MARGIN, CONTENT, CONTENT_BOTTOM,
-  fmt, fmtNum, fmtDate, fetchLogoBuffer,
+  fmt, fmtDate, fetchLogoBuffer,
   hRule, ensureSpace,
 } from '../../shared/services/pdfKit.js';
-import { prepareLogoForPdf } from '../../contracts/services/logoProcessor.js';
 
 const INK       = '#1a1a1a';
 const INK_SOFT  = '#595959';
@@ -19,28 +18,22 @@ const COL_GUTTER = 18;
 const SECTION_GAP = 14;
 
 const ITEM_COLS = [
-  { key: 'marks', label: 'MARKS & NOS',          width: 70,  align: 'left'   },
-  { key: 'goods', label: 'DESCRIPTION OF GOODS', width: 125, align: 'left'   },
-  { key: 'hsn',   label: 'HSN CODE',             width: 50,  align: 'center' },
-  { key: 'pkgs',  label: 'NO. & TYPE OF PKGS',   width: 68,  align: 'center' },
-  { key: 'net',   label: 'NET WT (KG)',          width: 60,  align: 'right'  },
-  { key: 'gross', label: 'GROSS WT (KG)',        width: 60,  align: 'right'  },
-  { key: 'qty',   label: 'QUANTITY',             width: CONTENT - (70 + 125 + 50 + 68 + 60 + 60), align: 'right' },
+  { key: 'commodity', label: 'COMMODITY', width: 130, align: 'left'   },
+  { key: 'hsnCode',   label: 'HSN CODE',  width: 55,  align: 'center' },
+  { key: 'quantity',  label: 'QTY',       width: 50,  align: 'right'  },
+  { key: 'unit',      label: 'UNIT',      width: 45,  align: 'center' },
+  { key: 'rate',      label: 'RATE',      width: 70,  align: 'right'  },
+  { key: 'amount',    label: 'AMOUNT',    width: CONTENT - (130 + 55 + 50 + 45 + 70), align: 'right' },
 ];
 
 function getItemCells(item) {
-  const goodsText = item.description
-    ? `${item.commodity || '—'} — ${item.description}`
-    : (item.commodity || '—');
-
   return [
-    item.marksAndNumbers || '—',
-    goodsText,
-    item.hsnCode || '—',
-    `${fmtNum(item.numberOfPackages)} ${item.packagingType || ''}`.trim(),
-    fmt(item.netWeight),
-    fmt(item.grossWeight),
-    `${fmtNum(item.quantity)} ${item.unit || ''}`.trim(),
+    item.commodity || '—',
+    item.hsnCode    || '—',
+    fmt(item.quantity),
+    item.unit       || '—',
+    fmt(item.rate),
+    fmt(item.amount),
   ];
 }
 
@@ -135,7 +128,7 @@ function drawLetterhead(doc, { organization, logoBuf }) {
 }
 
 function drawTitleBlock(doc, { title, docNumber, date }) {
-  const t = (title || 'PACKING LIST').toUpperCase();
+  const t = (title || 'PROFORMA INVOICE').toUpperCase();
   const titleOpts = { width: CONTENT, align: 'center', characterSpacing: 1.4 };
 
   doc.fontSize(18).font(SANS_B);
@@ -146,7 +139,7 @@ function drawTitleBlock(doc, { title, docNumber, date }) {
   doc.y = y + titleH + 6;
 
   const meta = [
-    docNumber ? `PL NO. ${docNumber}` : null,
+    docNumber ? `PI NO. ${docNumber}` : null,
     date      ? `DATE: ${date}`       : null,
   ].filter(Boolean).join('          ');
 
@@ -261,7 +254,7 @@ function measureItemsTableHeaderHeight(doc) {
   return headerH + PAD_Y * 2;
 }
 
-function itemsTable(doc, items, totals) {
+function itemsTable(doc, items) {
   const PAD_X = 6;
   const PAD_Y = 6;
   const xs = [];
@@ -329,39 +322,56 @@ function itemsTable(doc, items, totals) {
     hRule(doc, doc.y, LINE_SOFT, MARGIN, MARGIN + CONTENT);
   });
 
-  if (totals) {
-    const rowH = 22;
-    if (doc.y + rowH > CONTENT_BOTTOM) {
-      doc.addPage();
-      drawHeader();
-    }
-
-    const y = doc.y;
-    const labelW = ITEM_COLS[0].width + ITEM_COLS[1].width + ITEM_COLS[2].width;
-
-    doc.fontSize(8).font(SANS_B).fillColor(INK)
-      .text('TOTAL', MARGIN + PAD_X, y + PAD_Y, { width: labelW - PAD_X * 2, align: 'left', lineBreak: false });
-
-    const cells = [
-      fmtNum(totals.numberOfPackages),
-      fmt(totals.netWeight),
-      fmt(totals.grossWeight),
-      fmtNum(totals.quantity),
-    ];
-
-    let x = MARGIN + labelW;
-    [ITEM_COLS[3], ITEM_COLS[4], ITEM_COLS[5], ITEM_COLS[6]].forEach((c, ci) => {
-      doc.fontSize(8).font(SANS_B).fillColor(INK)
-        .text(cells[ci], x + PAD_X, y + PAD_Y, { width: c.width - PAD_X * 2, align: c.align, lineBreak: false });
-      x += c.width;
-    });
-
-    drawGridLines(y, y + rowH);
-    doc.y = y + rowH;
-    hRule(doc, doc.y, LINE, MARGIN, MARGIN + CONTENT);
-  }
-
   doc.y += 12;
+}
+
+const SUMMARY_TOTAL_W = 260;
+const SUMMARY_LABEL_W = 140;
+const SUMMARY_PAD_X   = 8;
+const SUMMARY_PAD_Y   = 5;
+
+function summaryRowHeight(doc, r) {
+  const valueText = `${r.currency} ${fmt(r.v)}`;
+  doc.fontSize(r.highlight ? 9.5 : 8.5).font(r.highlight || r.bold ? SANS_B : SANS);
+  return Math.max(
+    doc.heightOfString(r.l, { width: SUMMARY_LABEL_W - SUMMARY_PAD_X }),
+    doc.heightOfString(valueText, { width: SUMMARY_TOTAL_W - SUMMARY_LABEL_W - SUMMARY_PAD_X }),
+    9
+  ) + SUMMARY_PAD_Y * 2;
+}
+
+function measureFinancialSummary(doc, rows, currency) {
+  return rows.reduce((s, r) => s + summaryRowHeight(doc, { ...r, currency }), 0);
+}
+
+function financialSummary(doc, rows, currency) {
+  const totalX = MARGIN + CONTENT - SUMMARY_TOTAL_W;
+  const valueW = SUMMARY_TOTAL_W - SUMMARY_LABEL_W;
+
+  const computed = rows.map((r) => ({ ...r, h: summaryRowHeight(doc, { ...r, currency }), valueText: `${currency} ${fmt(r.v)}` }));
+
+  const top = doc.y;
+  let y = top;
+
+  hRule(doc, y, LINE, totalX, totalX + SUMMARY_TOTAL_W);
+  computed.forEach((r) => {
+    const emphFont   = r.highlight || r.bold ? SANS_B : SANS;
+    const labelSize  = r.highlight ? 9.5 : 8.5;
+    const labelColor = r.highlight || r.bold ? INK : INK_SOFT;
+
+    doc.fontSize(labelSize).font(emphFont).fillColor(labelColor)
+      .text(r.l, totalX + SUMMARY_PAD_X, y + SUMMARY_PAD_Y, { width: SUMMARY_LABEL_W - SUMMARY_PAD_X });
+    doc.fontSize(labelSize).font(emphFont).fillColor(INK)
+      .text(r.valueText, totalX + SUMMARY_LABEL_W, y + SUMMARY_PAD_Y, { width: valueW - SUMMARY_PAD_X, align: 'right' });
+    y += r.h;
+    hRule(doc, y, r.highlight ? LINE : LINE_SOFT, totalX, totalX + SUMMARY_TOTAL_W);
+  });
+
+  vRule(doc, totalX, top, y, LINE);
+  vRule(doc, totalX + SUMMARY_LABEL_W, top, y, LINE_SOFT);
+  vRule(doc, totalX + SUMMARY_TOTAL_W, top, y, LINE);
+
+  doc.y = y + 14;
 }
 
 function measureTextBlock(doc, text) {
@@ -406,8 +416,8 @@ function drawFooter(doc) {
   }
 }
 
-export async function buildPackingListPdf(pl, organization, logoUrl) {
-  const logoBuf = await prepareLogoForPdf(await fetchLogoBuffer(logoUrl));
+export async function buildProformaInvoicePdf(pi, organization, logoUrl) {
+  const logoBuf = await fetchLogoBuffer(logoUrl);
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -420,38 +430,38 @@ export async function buildPackingListPdf(pl, organization, logoUrl) {
     doc.on('end',   () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const pli       = pl.packingListInfo || {};
-    const exp        = pl.exporterDetails || {};
-    const buyer       = pl.buyerDetails    || {};
-    const consignee  = pl.consignee       || {};
-    const ship       = pl.shippingDetails || {};
-    const items      = pl.packingItems    || [];
+    const ii        = pi.invoiceInfo       || {};
+    const exp       = pi.exporterDetails   || {};
+    const buyer     = pi.buyerDetails      || {};
+    const notify    = pi.notifyParty       || {};
+    const consignee = pi.consignee         || {};
+    const ship      = pi.shippingInfo      || {};
+    const fin       = pi.financialInfo     || {};
+    const bank      = pi.bankInfo          || {};
+    const items     = pi.commercialDetails || [];
+    const currency  = ii.currency || 'USD';
 
-    const totals = items.reduce((acc, it) => ({
-      numberOfPackages: acc.numberOfPackages + (parseFloat(it.numberOfPackages) || 0),
-      netWeight:        acc.netWeight        + (parseFloat(it.netWeight)        || 0),
-      grossWeight:      acc.grossWeight      + (parseFloat(it.grossWeight)      || 0),
-      quantity:         acc.quantity         + (parseFloat(it.quantity)         || 0),
-    }), { numberOfPackages: 0, netWeight: 0, grossWeight: 0, quantity: 0 });
+    const totalAmount = items.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
 
     drawLetterhead(doc, { organization, logoBuf });
     drawTitleBlock(doc, {
-      title:     'PACKING LIST',
-      docNumber: pl.packingListNumber,
-      date:      fmtDate(pli.date),
+      title:     'PROFORMA INVOICE',
+      docNumber: pi.proformaInvoiceNumber,
+      date:      fmtDate(ii.invoiceDate),
     });
 
     let n = 0;
     const nextNum = () => ++n;
 
     const infoFields = [
-      { l: 'PL Number',       v: pl.packingListNumber },
-      { l: 'Date',            v: fmtDate(pli.date) },
-      { l: 'Contract Number', v: pl.contractNumber },
-      { l: 'Status',          v: pl.status },
+      { l: 'PI Number',       v: pi.proformaInvoiceNumber },
+      { l: 'Invoice Date',    v: fmtDate(ii.invoiceDate) },
+      { l: 'Currency',        v: ii.currency },
+      { l: 'Contract Number', v: pi.contractNumber },
+      { l: 'Status',          v: pi.status },
     ].filter((f) => f.v);
     const infoRows = chunkRows(infoFields);
-    sectionHeading(doc, nextNum(), 'Packing List Information', measureFieldRows(doc, infoRows));
+    sectionHeading(doc, nextNum(), 'Proforma Invoice Information', measureFieldRows(doc, infoRows));
     fieldGrid(doc, infoRows);
 
     const expFields = [
@@ -487,6 +497,21 @@ export async function buildPackingListPdf(pl, organization, logoUrl) {
     fieldGrid(doc, buyerRows);
     addressBlock(doc, 'Address', buyer.address);
 
+    const notifyFields = [
+      { l: 'Name',    v: notify.name },
+      { l: 'Country', v: notify.country },
+      { l: 'Phone',   v: notify.phone },
+      { l: 'Email',   v: notify.email },
+    ].filter((f) => f.v);
+    const notifyRows = chunkRows(notifyFields);
+    doc.y += SECTION_GAP;
+    sectionHeading(
+      doc, nextNum(), 'Notify Party',
+      measureFieldRows(doc, notifyRows) + measureAddressBlock(doc, notify.address)
+    );
+    fieldGrid(doc, notifyRows);
+    addressBlock(doc, 'Address', notify.address);
+
     const consFields = [
       { l: 'Name',    v: consignee.name },
       { l: 'Country', v: consignee.country },
@@ -503,31 +528,50 @@ export async function buildPackingListPdf(pl, organization, logoUrl) {
     addressBlock(doc, 'Address', consignee.address);
 
     const shipFields = [
-      { l: 'Port of Loading',   v: ship.portOfLoading },
-      { l: 'Port of Discharge', v: ship.portOfDischarge },
-      { l: 'Vessel',            v: ship.vessel },
-      { l: 'Container Number',  v: ship.containerNumber },
-      { l: 'Seal Number',       v: ship.sealNumber },
+      { l: 'Port of Loading',    v: ship.portOfLoading },
+      { l: 'Port of Discharge',  v: ship.portOfDischarge },
+      { l: 'Final Destination',  v: ship.finalDestination },
+      { l: 'Country of Origin',  v: ship.countryOfOrigin },
     ].filter((f) => f.v);
     const shipRows = chunkRows(shipFields);
     doc.y += SECTION_GAP;
-    sectionHeading(doc, nextNum(), 'Shipping Details', measureFieldRows(doc, shipRows));
+    sectionHeading(doc, nextNum(), 'Shipping Information', measureFieldRows(doc, shipRows));
     fieldGrid(doc, shipRows);
 
     doc.y += SECTION_GAP;
-    sectionHeading(doc, nextNum(), 'Item Details', Math.max(60, measureItemsTableHeaderHeight(doc) + 24));
-    itemsTable(doc, items, totals);
+    sectionHeading(doc, nextNum(), 'Commercial Details', Math.max(60, measureItemsTableHeaderHeight(doc) + 24));
+    itemsTable(doc, items);
 
-    if ((pl.remarks || '').toString().trim()) {
+    const summaryRows = [
+      { l: 'Total Amount', v: totalAmount },
+      { l: `Advance (${fmt(fin.advancePercent)}%)`, v: fin.advanceAmount },
+      { l: 'Balance Amount', v: fin.balanceAmount, highlight: true },
+    ];
+    doc.y += SECTION_GAP;
+    sectionHeading(doc, nextNum(), 'Financial Summary', measureFinancialSummary(doc, summaryRows, currency));
+    financialSummary(doc, summaryRows, currency);
+
+    const bankFields = [
+      { l: 'Bank Name',      v: bank.bankName },
+      { l: 'Account Number', v: bank.accountNumber },
+      { l: 'IFSC',           v: bank.ifsc },
+      { l: 'SWIFT',          v: bank.swift },
+    ].filter((f) => f.v);
+    const bankRows = chunkRows(bankFields);
+    doc.y += SECTION_GAP;
+    sectionHeading(doc, nextNum(), 'Bank Details', measureFieldRows(doc, bankRows));
+    fieldGrid(doc, bankRows);
+
+    if ((pi.notes || '').toString().trim()) {
       doc.y += SECTION_GAP;
-      sectionHeading(doc, nextNum(), 'Remarks', measureTextBlock(doc, pl.remarks));
-      textBlock(doc, pl.remarks);
+      sectionHeading(doc, nextNum(), 'Notes', measureTextBlock(doc, pi.notes));
+      textBlock(doc, pi.notes);
     }
 
-    if ((pl.termsAndConditions || '').toString().trim()) {
+    if ((pi.termsAndConditions || '').toString().trim()) {
       doc.y += SECTION_GAP;
-      sectionHeading(doc, nextNum(), 'Terms & Conditions', measureTextBlock(doc, pl.termsAndConditions));
-      textBlock(doc, pl.termsAndConditions);
+      sectionHeading(doc, nextNum(), 'Terms & Conditions', measureTextBlock(doc, pi.termsAndConditions));
+      textBlock(doc, pi.termsAndConditions);
     }
 
     drawFooter(doc);
